@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prg_contact"
+version = "0.1.0"
+description = "PyTorch dataloaders for hand-object contact detection (EPIC-VISOR and HOI4D)"
+authors = [{name = "Akhil Kambhatla", email = "kakhil@umd.edu"}]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=1.13",
+    "torchvision>=0.14",
+    "numpy>=1.21",
+    "Pillow>=9.0",
+    "opencv-python>=4.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+include = ["prg_contact*"]
+
+[tool.setuptools.package-data]
+"prg_contact.splits" = ["*.txt"]
