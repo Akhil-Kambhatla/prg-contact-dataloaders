@@ -44,14 +44,14 @@ for batch in loader:
 
 ## Verifying the dataloaders work
 
-After installation, run on the cluster:
+After installation on the cluster:
 
 ```bash
-python scripts/verify_visor.py --output_dir verify_outputs/visor --n 10
-python scripts/verify_hoi4d.py --output_dir verify_outputs/hoi4d --n 10
+python scripts/verify_visor.py --split val --n 10 --output_dir verify_outputs/visor --prefer_contact
+python scripts/verify_hoi4d.py --split val --n 10 --output_dir verify_outputs/hoi4d --prefer_contact
 ```
 
-Each script samples 10 frames, saves side-by-side visualizations of the image, the left-hand contact mask overlay, and the right-hand contact mask overlay. Open the outputs and confirm masks fall on contacted objects.
+Each script samples N frames, saves side-by-side visualizations of the image, left-hand contact mask overlay (green), and right-hand contact mask overlay (red).
 
 ## VISOR contact semantics
 
