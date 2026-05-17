@@ -20,6 +20,35 @@ from .base import ContactDatasetBase
 
 DEFAULT_HOI4D_ROOT = "/fs/vulcan-datasets/HOI4D"
 
+# Pascal VOC colormap: RGB triple -> label index.
+# HOI4D 2Dseg masks are saved with this colormap; PIL reads them as RGB.
+# We decode back to integer labels here. First 8 entries cover the
+# typical HOI4D label range (background, primary object, hand, parts).
+_VOC_COLOR_TO_LABEL = {
+    (0, 0, 0): 0,
+    (128, 0, 0): 1,
+    (0, 128, 0): 2,
+    (128, 128, 0): 3,
+    (0, 0, 128): 4,
+    (128, 0, 128): 5,
+    (0, 128, 128): 6,
+    (128, 128, 128): 7,
+    (64, 0, 0): 8,
+    (192, 0, 0): 9,
+    (64, 128, 0): 10,
+    (192, 128, 0): 11,
+}
+
+
+def _decode_rgb_to_labels(rgb: np.ndarray) -> np.ndarray:
+    """Convert an (H, W, 3) Pascal VOC colormap image to an (H, W) label map."""
+    h, w, _ = rgb.shape
+    labels = np.zeros((h, w), dtype=np.uint8)
+    for color, idx in _VOC_COLOR_TO_LABEL.items():
+        matches = np.all(rgb == np.array(color, dtype=np.uint8), axis=-1)
+        labels[matches] = idx
+    return labels
+
 
 def _split_file_for(split: str) -> str:
     """Locate the shipped split file."""
@@ -39,6 +68,7 @@ class HOI4DContactDataset(ContactDatasetBase):
         split_list_path: Optional[str] = None,
         image_size: Optional[Tuple[int, int]] = None,
         transform: Optional[Callable] = None,
+        require_mask: bool = True,
     ):
         super().__init__(image_size=image_size, transform=transform)
         self.split = split
@@ -47,6 +77,7 @@ class HOI4DContactDataset(ContactDatasetBase):
         self.records = parse_hoi4d_split(
             hoi4d_root=hoi4d_root,
             split_list_path=split_list_path,
+            require_mask=require_mask,
         )
         self._video_cache: Dict[str, cv2.VideoCapture] = {}
 
@@ -76,10 +107,10 @@ class HOI4DContactDataset(ContactDatasetBase):
         img_w, img_h = image.size
 
         if record.mask_path is not None and os.path.exists(record.mask_path):
-            seg = np.asarray(Image.open(record.mask_path))
-            if seg.ndim == 3:
-                seg = seg[:, :, 0]
-            obj_mask = np.where(seg == PRIMARY_OBJECT_LABEL, 255, 0).astype(np.uint8)
+            seg_pil = Image.open(record.mask_path)
+            seg_rgb = np.asarray(seg_pil.convert("RGB"))
+            labels = _decode_rgb_to_labels(seg_rgb)
+            obj_mask = np.where(labels == PRIMARY_OBJECT_LABEL, 255, 0).astype(np.uint8)
             if obj_mask.shape != (img_h, img_w):
                 obj_mask = np.array(
                     Image.fromarray(obj_mask).resize((img_w, img_h), Image.NEAREST)

@@ -72,3 +72,22 @@ The contacted-object mask is the primary-object label (always label index 1) fro
 
 - VISOR: native `train/` and `val/` JSON directories under `GroundTruth-SparseAnnotations/annotations/`.
 - HOI4D: `release.txt` (train) and `testset.txt` (val) from the official [HOI4D-Instructions](https://github.com/hoi4d/HOI4D-Instructions) repo. Copies shipped in `prg_contact/splits/`.
+
+## HOI4D coverage caveat
+
+HOI4D's 2D segmentation annotations are concentrated on the train split:
+
+| Split | Recordings | With 2Dseg mask | Coverage |
+|-------|-----------:|----------------:|---------:|
+| train | 2971       | 2970            | 99.97%   |
+| val   | 933        | 32              | 3.4%     |
+
+The mask subdirectory is either `2Dseg/shift_mask` (typical for newer recordings) or `2Dseg/mask` (older). The dataloader checks for `shift_mask` first, falls back to `mask`. Recordings with neither are skipped by default (`require_mask=True`); pass `require_mask=False` to include all classifiable frames with zero masks for the mask-less ones.
+
+Because val has only 3.4% mask coverage, it is not suitable as-is for mask-supervised validation. Options for the consuming project:
+
+1. Use HOI4D train only and validate on VISOR.
+2. Re-split HOI4D combining all recordings, filtering by mask presence first, then 80/20.
+3. Accept the small (32-recording) HOI4D val and report that limitation explicitly.
+
+Mask values use the Pascal VOC colormap. The dataloader decodes RGB triples back to integer label indices (label 1 = primary object = the contacted object's mask).

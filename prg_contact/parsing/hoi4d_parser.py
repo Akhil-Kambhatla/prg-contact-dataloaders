@@ -29,6 +29,10 @@ BOTH_HANDS_EVENTS = {
 PRIMARY_OBJECT_LABEL = 1
 FRAMES_PER_RECORDING = 300
 
+# Subdirectory names under 2Dseg/ that contain per-frame mask PNGs.
+# Tried in order; first one that exists wins.
+MASK_SUBDIR_CANDIDATES = ("shift_mask", "mask")
+
 
 @dataclass
 class HOI4DSampleRecord:
@@ -47,6 +51,18 @@ def _get_category(recording_path: str) -> Optional[str]:
     for part in recording_path.split("/"):
         if part.startswith("C") and part[1:].isdigit():
             return part
+    return None
+
+
+def _resolve_mask_dir(annotations_root: str, recording_path: str) -> Optional[str]:
+    """Return the absolute path to the 2Dseg mask dir for this recording, or None."""
+    seg_dir = os.path.join(annotations_root, recording_path, "2Dseg")
+    if not os.path.isdir(seg_dir):
+        return None
+    for candidate in MASK_SUBDIR_CANDIDATES:
+        candidate_path = os.path.join(seg_dir, candidate)
+        if os.path.isdir(candidate_path):
+            return candidate_path
     return None
 
 
@@ -104,8 +120,18 @@ def _classify_event(event_name: str) -> Optional[Tuple[bool, bool]]:
 def parse_hoi4d_split(
     hoi4d_root: str,
     split_list_path: str,
+    require_mask: bool = True,
 ) -> List[HOI4DSampleRecord]:
-    """Walk an HOI4D split's recording list and emit per-frame records."""
+    """Walk an HOI4D split's recording list and emit per-frame records.
+
+    Args:
+        hoi4d_root: e.g. "/fs/vulcan-datasets/HOI4D"
+        split_list_path: text file of recording paths, one per line.
+        require_mask: if True (default), skip recordings without a 2Dseg
+            mask directory (shift_mask or mask). Set False to include all
+            classifiable frames; mask-less frames will have mask_path=None
+            and the dataset will return zero contact masks for them.
+    """
     videos_root = os.path.join(hoi4d_root, "HOI4D_release")
     annotations_root = os.path.join(hoi4d_root, "HOI4D_annotations")
 
@@ -117,9 +143,12 @@ def parse_hoi4d_split(
     for rec_path in recording_paths:
         video_path = os.path.join(videos_root, rec_path, "align_rgb", "image.mp4")
         action_path = os.path.join(annotations_root, rec_path, "action", "color.json")
-        mask_dir = os.path.join(annotations_root, rec_path, "2Dseg", "mask")
 
         if not os.path.exists(video_path) or not os.path.exists(action_path):
+            continue
+
+        mask_dir = _resolve_mask_dir(annotations_root, rec_path)
+        if require_mask and mask_dir is None:
             continue
 
         try:
@@ -127,7 +156,6 @@ def parse_hoi4d_split(
         except (ValueError, KeyError, json.JSONDecodeError):
             continue
 
-        has_masks = os.path.isdir(mask_dir)
         category = _get_category(rec_path)
 
         for frame_idx in range(FRAMES_PER_RECORDING):
@@ -140,7 +168,7 @@ def parse_hoi4d_split(
             left_contact, right_contact = classification
 
             mask_path = None
-            if has_masks:
+            if mask_dir is not None:
                 candidate = os.path.join(mask_dir, f"{frame_idx:05d}.png")
                 if os.path.exists(candidate):
                     mask_path = candidate
