@@ -4,6 +4,11 @@ Each row in sta_object_bboxes.csv is one (frame, object) pair: a frame
 identified by clip_uid + clip_frame, plus a single object bounding box,
 noun/verb, and time_to_contact. We unroll multi-object frames so each
 sample is exactly one (frame, object) pair.
+
+STA annotates pre-contact keyframes. The `time_to_contact` field (seconds)
+indicates how long until contact happens. This parser supports filtering
+to a ttc range so callers can choose how close-to-contact they want
+samples to be.
 """
 
 from __future__ import annotations
@@ -35,6 +40,8 @@ def parse_ego4d_split(
     split: str,
     mask_version: str = "v2",
     skip_missing: bool = True,
+    max_time_to_contact: Optional[float] = 0.3,
+    min_time_to_contact: float = 0.0,
 ) -> List[Ego4DSampleRecord]:
     """Walk the STA bbox manifest and emit one record per (frame, object) pair.
 
@@ -47,6 +54,12 @@ def parse_ego4d_split(
             multimask, picks highest-scoring mask).
         skip_missing: if True, skip records whose JPG or mask PNG doesn't
             exist on disk.
+        max_time_to_contact: seconds. Only keep records with ttc <= this.
+            Default 0.3s keeps frames where contact is imminent (~9 video
+            frames before contact at 30fps). Set to None to disable the
+            upper bound and include all records.
+        min_time_to_contact: seconds. Only keep records with ttc >= this.
+            Default 0.0.
 
     Returns:
         List of Ego4DSampleRecord.
@@ -61,6 +74,21 @@ def parse_ego4d_split(
         for row in reader:
             if row["split"] != split:
                 continue
+
+            try:
+                ttc = float(row["time_to_contact"]) if row["time_to_contact"] else None
+            except (ValueError, KeyError):
+                ttc = None
+
+            # Filter by ttc range. Records with missing ttc are skipped when
+            # a filter is active.
+            if max_time_to_contact is not None or min_time_to_contact > 0.0:
+                if ttc is None:
+                    continue
+                if ttc < min_time_to_contact:
+                    continue
+                if max_time_to_contact is not None and ttc > max_time_to_contact:
+                    continue
 
             clip_uid = row["clip_uid"]
             clip_frame = int(row["clip_frame"])
@@ -77,11 +105,6 @@ def parse_ego4d_split(
             if skip_missing:
                 if not os.path.exists(image_path) or not os.path.exists(mask_path):
                     continue
-
-            try:
-                ttc = float(row["time_to_contact"]) if row["time_to_contact"] else None
-            except (ValueError, KeyError):
-                ttc = None
 
             records.append(Ego4DSampleRecord(
                 image_path=image_path,

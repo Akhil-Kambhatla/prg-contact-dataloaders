@@ -118,6 +118,32 @@ processed/<split>/<clip_uid>/
 
 The dataloader defaults to v2 masks. Pass `mask_version="v1"` to use v1.
 
+### Filtering by time_to_contact
+
+STA annotates pre-contact keyframes. Each annotation has a `time_to_contact` field (seconds) indicating how many seconds remain until contact. To get frames where contact is actually happening (or imminent), the dataloader filters by ttc by default.
+
+Distribution of ttc across all 152,075 STA annotations:
+
+| ttc range | Count | % |
+|-----------|------:|--:|
+| < 0.1s    | 4,758 | 3.1 |
+| < 0.3s    | 28,493 | 18.7 |
+| < 0.5s    | 36,817 | 24.2 |
+| median    | 1.03s | |
+
+Default filter: `max_time_to_contact=0.3` (≈9 video frames before contact at 30fps; hand and object are visually together).
+
+```python
+# Default: ttc <= 0.3s, ~28K samples across train+val
+ds = Ego4DContactDataset(split="train")
+
+# Strict: only frames very near contact
+ds_strict = Ego4DContactDataset(split="train", max_time_to_contact=0.1)
+
+# No filter: all 152K annotations (mostly pre-contact)
+ds_all = Ego4DContactDataset(split="train", max_time_to_contact=None)
+```
+
 ### Mask quality caveat
 
 Ego4D STA bounding boxes are looser than VISOR/HOI4D ground-truth annotations because STA was designed for forecasting, not segmentation. SAM2 masks reflect the bbox quality: when the bbox is tight, the mask is good; when the bbox is loose or partly occluded, the mask is noisier. Roughly 60-70% of v2 masks look correct on visual inspection; the remaining 30-40% have varying quality, mostly traceable to STA bbox imprecision.

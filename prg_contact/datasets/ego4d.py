@@ -4,6 +4,10 @@ Loads preprocessed frames and SAM2 contact masks. Each sample is one
 (frame, object) pair. Unlike VISOR/HOI4D, returns a single mask per
 sample (shape [1, H, W]) since STA does not attribute contact to a
 specific hand.
+
+By default, filters to frames where time_to_contact <= 0.3s (i.e. the
+hand and object are visually together, contact is imminent). Pass
+max_time_to_contact=None to disable the filter.
 """
 
 from __future__ import annotations
@@ -34,9 +38,9 @@ class Ego4DContactDataset(ContactDatasetBase):
 
     Each sample returns:
         image: [3, H, W] float, ImageNet-normalized
-        contact_state: scalar LongTensor (always 1 for STA)
+        contact_state: scalar LongTensor (always 1 for STA contact frames)
         contact_mask: [1, H, W] float, binary
-        meta: dict
+        meta: dict (includes time_to_contact)
     """
 
     def __init__(
@@ -48,10 +52,14 @@ class Ego4DContactDataset(ContactDatasetBase):
         image_size: Optional[Tuple[int, int]] = None,
         transform: Optional[Callable] = None,
         skip_missing: bool = True,
+        max_time_to_contact: Optional[float] = 0.3,
+        min_time_to_contact: float = 0.0,
     ):
         super().__init__(image_size=image_size, transform=transform)
         self.split = split
         self.mask_version = mask_version
+        self.max_time_to_contact = max_time_to_contact
+        self.min_time_to_contact = min_time_to_contact
         if bbox_csv_path is None:
             bbox_csv_path = _default_bbox_csv_path()
         self.records = parse_ego4d_split(
@@ -60,6 +68,8 @@ class Ego4DContactDataset(ContactDatasetBase):
             split=split,
             mask_version=mask_version,
             skip_missing=skip_missing,
+            max_time_to_contact=max_time_to_contact,
+            min_time_to_contact=min_time_to_contact,
         )
 
     def _load_image_and_mask(self, record: Ego4DSampleRecord):
