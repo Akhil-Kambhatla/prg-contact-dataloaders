@@ -1,17 +1,17 @@
-"""Ego4D STA contact dataset.
+"""Ego4D fho_scod contact dataset.
 
-Loads preprocessed frames and SAM2 contact masks. Each sample is one
-(frame, object) pair. Unlike VISOR/HOI4D, returns a single mask per
-sample (shape [1, H, W]) since STA does not attribute contact to a
-specific hand.
+Loads frames and per-hand binary contact labels derived from fho_scod v1
+annotations. The contact label for each hand is 1 if both the hand bbox and
+the object_of_change bbox are present in that keyframe, else 0.
 
-By default, filters to frames where time_to_contact <= 0.3s (i.e. the
-hand and object are visually together, contact is imminent). Pass
-max_time_to_contact=None to disable the filter.
+No segmentation masks are provided for Ego4D (fho_scod has no segmentations).
+The dataset returns an empty (zeros) mask tensor to keep the output shape
+consistent with VISOR and HOI4D.
 """
 
 from __future__ import annotations
 
+import csv
 import os
 from typing import Callable, Dict, Optional, Tuple
 
@@ -19,109 +19,107 @@ import numpy as np
 import torch
 from PIL import Image
 
-from prg_contact.parsing.ego4d_parser import Ego4DSampleRecord, parse_ego4d_split
-
 from .base import ContactDatasetBase
 
-DEFAULT_PROCESSED_ROOT = "/fs/nexus-scratch/kakhil/ego4d_pipeline/processed"
-
-
-def _default_bbox_csv_path() -> str:
-    """Locate the shipped STA bbox manifest."""
-    from importlib import resources
-    with resources.path("prg_contact.splits", "ego4d_sta_object_bboxes.csv") as p:
-        return str(p)
+DEFAULT_MANIFEST_DIR = "/fs/nexus-scratch/kakhil/ego4d_pipeline/fho_hands_processed"
+DEFAULT_FRAMES_DIR = os.path.join(DEFAULT_MANIFEST_DIR, "frames")
 
 
 class Ego4DContactDataset(ContactDatasetBase):
-    """Ego4D STA hand-object contact dataset.
+    """Ego4D fho_scod per-hand contact dataset.
 
     Each sample returns:
         image: [3, H, W] float, ImageNet-normalized
-        contact_state: scalar LongTensor (always 1 for STA contact frames)
-        contact_mask: [1, H, W] float, binary
-        meta: dict (includes time_to_contact)
+        contact_state: [2] LongTensor, [contact_left, contact_right]
+        contact_mask: [2, H, W] float, all zeros (no seg available)
+        meta: dict
     """
 
     def __init__(
         self,
         split: str = "train",
-        processed_root: str = DEFAULT_PROCESSED_ROOT,
-        bbox_csv_path: Optional[str] = None,
-        mask_version: str = "v2",
+        manifest_dir: str = DEFAULT_MANIFEST_DIR,
+        frames_dir: str = DEFAULT_FRAMES_DIR,
         image_size: Optional[Tuple[int, int]] = None,
         transform: Optional[Callable] = None,
         skip_missing: bool = True,
-        max_time_to_contact: Optional[float] = 0.3,
-        min_time_to_contact: float = 0.0,
     ):
         super().__init__(image_size=image_size, transform=transform)
         self.split = split
-        self.mask_version = mask_version
-        self.max_time_to_contact = max_time_to_contact
-        self.min_time_to_contact = min_time_to_contact
-        if bbox_csv_path is None:
-            bbox_csv_path = _default_bbox_csv_path()
-        self.records = parse_ego4d_split(
-            bbox_csv_path=bbox_csv_path,
-            processed_root=processed_root,
-            split=split,
-            mask_version=mask_version,
-            skip_missing=skip_missing,
-            max_time_to_contact=max_time_to_contact,
-            min_time_to_contact=min_time_to_contact,
-        )
+        self.frames_dir = frames_dir
 
-    def _load_image_and_mask(self, record: Ego4DSampleRecord):
-        image = Image.open(record.image_path).convert("RGB")
-        img_w, img_h = image.size
+        csv_path = os.path.join(manifest_dir, f"fho_scod_{split}_available.csv")
+        if not os.path.exists(csv_path):
+            csv_path = os.path.join(manifest_dir, f"fho_scod_{split}.csv")
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"No manifest CSV at {csv_path}")
 
-        mask_pil = Image.open(record.mask_path).convert("L")
-        mask = np.asarray(mask_pil)
-        if mask.shape != (img_h, img_w):
-            mask = np.array(
-                Image.fromarray(mask).resize((img_w, img_h), Image.NEAREST)
-            )
-        return image, mask
+        records = []
+        with open(csv_path) as f:
+            for r in csv.DictReader(f):
+                clip_uid = r["clip_uid"]
+                frame_num = int(r["frame_number"])
+                img_path = os.path.join(frames_dir, clip_uid, f"{frame_num:08d}.jpg")
+                if skip_missing and not os.path.exists(img_path):
+                    continue
+                records.append({
+                    "clip_uid": clip_uid,
+                    "record_idx": int(r["record_idx"]),
+                    "keyframe_type": r["keyframe_type"],
+                    "frame_number": frame_num,
+                    "width": int(r["width"]),
+                    "height": int(r["height"]),
+                    "contact_left": int(r["contact_left"]),
+                    "contact_right": int(r["contact_right"]),
+                    "image_path": img_path,
+                })
+        self.records = records
 
-    def _resize_pair(self, image: Image.Image, mask: np.ndarray):
+    def __len__(self):
+        return len(self.records)
+
+    def _load_image(self, record):
+        return Image.open(record["image_path"]).convert("RGB")
+
+    def _resize(self, image: Image.Image):
         if self.image_size is None:
-            return image, mask
+            return image
         target_h, target_w = self.image_size
-        image = image.resize((target_w, target_h), Image.BILINEAR)
-        mask = np.array(
-            Image.fromarray(mask).resize((target_w, target_h), Image.NEAREST)
-        )
-        return image, mask
-
-    def _record_meta(self, record: Ego4DSampleRecord) -> Dict:
-        return {
-            "dataset": "ego4d",
-            "clip_uid": record.clip_uid,
-            "clip_frame": record.clip_frame,
-            "object_index": record.object_index,
-            "noun": record.noun,
-            "verb": record.verb,
-            "time_to_contact": record.time_to_contact,
-            "bbox": list(record.bbox),
-            "frame_path": record.image_path,
-            "mask_path": record.mask_path,
-        }
+        return image.resize((target_w, target_h), Image.BILINEAR)
 
     def __getitem__(self, idx: int):
         record = self.records[idx]
-        image, mask = self._load_image_and_mask(record)
-        image, mask = self._resize_pair(image, mask)
+        image = self._load_image(record)
+        image = self._resize(image)
+
         if self.transform is not None:
-            image, mask = self.transform(image, mask)
+            image, _ = self.transform(image, None)
 
         image_tensor = self._normalize_image(image)
-        mask_tensor = torch.from_numpy((mask > 127).astype(np.float32)).unsqueeze(0)
-        state_tensor = torch.tensor(1, dtype=torch.long)
+
+        # Empty mask placeholder, shape [2, H, W] to match per-hand convention
+        H, W = image_tensor.shape[-2], image_tensor.shape[-1]
+        mask_tensor = torch.zeros((2, H, W), dtype=torch.float32)
+
+        state_tensor = torch.tensor(
+            [record["contact_left"], record["contact_right"]],
+            dtype=torch.long,
+        )
+
+        meta = {
+            "dataset": "ego4d",
+            "clip_uid": record["clip_uid"],
+            "record_idx": record["record_idx"],
+            "keyframe_type": record["keyframe_type"],
+            "frame_number": record["frame_number"],
+            "orig_width": record["width"],
+            "orig_height": record["height"],
+            "frame_path": record["image_path"],
+        }
 
         return {
             "image": image_tensor,
             "contact_state": state_tensor,
             "contact_mask": mask_tensor,
-            "meta": self._record_meta(record),
+            "meta": meta,
         }
